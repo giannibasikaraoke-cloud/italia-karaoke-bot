@@ -2135,4 +2135,10 @@ if __name__ == "__main__":
         while True:
             time.sleep(60)
 
+# === AVVIO SERVER FLASK (FONDAMENTALE PER RENDER) ===
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+
+
 
