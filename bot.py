@@ -2076,8 +2076,8 @@ from flask import Flask, request
 import logging
 
 # Disabilita i log di Flask per non sporcare la console
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+flask_log = logging.getLogger('werkzeug')
+flask_log.setLevel(logging.ERROR)
 
 app = Flask(__name__)
 
