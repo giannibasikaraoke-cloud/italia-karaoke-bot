@@ -611,6 +611,7 @@ Sono {int(ore_attesa)} ore che aspetti.
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    print(f"🔥 COMANDO START RICEVUTO da {message.from_user.id} - Username: {message.from_user.username}")
     user_id = message.from_user.id
     username = message.from_user.username or f"ID_{user_id}"
     
@@ -2133,4 +2134,5 @@ if __name__ == "__main__":
     if not os.environ.get('RENDER'):
         while True:
             time.sleep(60)
+
 
