@@ -6,8 +6,14 @@ import threading
 import re
 from datetime import datetime, timedelta
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from flask import Flask, request
-import logging
+
+# === CARICA CONFIG ===
+try:
+    from config import TOKEN, TUO_ID
+    bot = telebot.TeleBot(TOKEN)
+except:
+    print("❌ ERRORE: Crea config.py con TOKEN e TUO_ID!")
+    exit()
 
 # === LOG CON OFFUSCAMENTO EMAIL (MODIFICATO) ===
 def log(t):
@@ -41,14 +47,6 @@ def log(t):
     
     with open("log.txt", "a", encoding="utf-8") as f:
         f.write(f"[{timestamp}] {messaggio_offuscato}\n")
-
-# === CARICA CONFIG ===
-try:
-    from config import TOKEN, TUO_ID
-    bot = telebot.TeleBot(TOKEN)
-except:
-    print("❌ ERRORE: Crea config.py con TOKEN e TUO_ID!")
-    exit()
 
 # === VARIABILI GLOBALI ===
 users = None
@@ -611,7 +609,6 @@ Sono {int(ore_attesa)} ore che aspetti.
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    print(f"🔥 COMANDO START RICEVUTO da {message.from_user.id} - Username: {message.from_user.username}")
     user_id = message.from_user.id
     username = message.from_user.username or f"ID_{user_id}"
     
@@ -1837,6 +1834,8 @@ def invia_prioritario(message):
         user_id = int(parts[1])
         drive_url = parts[2]
         
+        # Verifica che l'utente abbia fatto like+commento (tu devi averlo verificato)
+        # Qui usiamo lo stesso codice di /link ma con una nota diversa
         message.text = f"/link {user_id} {drive_url}"
         invia_link(message)
         
@@ -2020,13 +2019,317 @@ def gdpr_status(message):
     bot.reply_to(message, testo, parse_mode="HTML")
     log(f"GDPR STATUS: {totali} dati in cancellazione, {scaduti} scaduti")
 
+# ====================== GESTIONE FLUSSO UTENTE ======================
+
+@bot.message_handler(func=lambda m: m.text and m.text.upper() in ["ACCETTO", "OK", "SI"])
+def accetta_testo(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or f"ID_{user_id}"
+    
+    if is_bannato(user_id):
+        return
+    
+    puo, ore_rimaste, tipo = puo_fare_richiesta(user_id)
+    
+    if not puo:
+        if tipo == "TEMPO":
+            if user_id in users and users[user_id]["stato"] > 0:
+                if aggiungi_violazione(user_id, username, "Riavvio processo durante limite"):
+                    return
+            
+            ore_rimaste_int = int(ore_rimaste)
+            minuti_rimasti = int((ore_rimaste - ore_rimaste_int) * 60)
+            
+            testo = f"""⏳ ATTENZIONE
+            
+Devi attendere ancora {ore_rimaste_int} ore e {minuti_rimasti} minuti.
+⚠️ Ogni ulteriore tentativo = violazione."""
+            
+            bot.reply_to(message, testo)
+            return
+        elif tipo == "BANNATO":
+            return
+    
+    registra_accettazione_privacy(user_id)
+    
+    if user_id not in users:
+        users[user_id] = {"stato": 0, "tipo": "", "link": "", "email": "", "username": username}
+    
+    users[user_id]["stato"] = 1
+    users[user_id]["username"] = username
+    salva_dati()
+    
+    mostra_pulsanti_scelta(message.chat.id)
+    log(f"ACCETTA via testo: @{username}")
+
+@bot.message_handler(func=lambda m: m.text and m.text.upper() in ["A", "B"])
+def scelta_testo(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or f"ID_{user_id}"
+    
+    if not ha_accettato_privacy(user_id):
+        bot.reply_to(message, "❌ Devi prima accettare la privacy con /start")
+        return
+    
+    if user_id not in users or users[user_id]["stato"] != 1:
+        return
+    
+    scelta_utente = message.text.upper()
+    
+    if scelta_utente == "A":
+        scelta_tipo = "DEMO"
+        testo_risposta = """🎬 <b>Hai scelto: DEMO ESISTENTE</b>
+        
+🔗 <b>Invia il link della DEMO che hai trovato nel canale https://www.youtube.com/@ItaliaKaraoke</b>
+
+⚠️ <i>Il link deve essere preso dal nostro canale ufficiale</i>"""
+    else:
+        mostra_scelta_devo_tipo(message.chat.id)
+        return
+    
+    users[user_id]["tipo"] = scelta_tipo
+    users[user_id]["stato"] = 2
+    users[user_id]["username"] = username
+    salva_dati()
+    
+    bot.reply_to(message, testo_risposta, parse_mode="HTML")
+    log(f"SCELTA {scelta_tipo} via testo: @{username}")
+
+@bot.message_handler(func=lambda m: m.text and 'youtu' in m.text.lower())
+def link(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or f"ID_{user_id}"
+    
+    if is_bannato(user_id):
+        return
+    
+    if not ha_accettato_privacy(user_id):
+        bot.reply_to(message, "❌ Devi prima accettare la privacy con /start")
+        return
+    
+    if user_id not in users or users[user_id]["stato"] != 2:
+        if user_id in ultime_richieste:
+            tempo_trascorso = time.time() - ultime_richieste[user_id]
+            if tempo_trascorso < 86400:
+                aggiungi_violazione(user_id, username, "Invio link durante limite 24h")
+                testo = f"""⚠️ VIOLAZIONE REGISTRATA
+                
+Hai tentato di bypassare il limite.
+📊 Violazioni: {violazioni.get(user_id, 0)}/3
+                
+3 violazioni = ban permanente."""
+                bot.reply_to(message, testo)
+                return
+        return
+    
+    # === CONTROLLO LINK ===
+    link_utente = message.text.strip()
+    is_valido, tipo_errore = is_valido_link_youtube(link_utente)
+    
+    if not is_valido:
+        if tipo_errore == "canale":
+            testo_errore = """❌ <b>LINK NON VALIDO</b>
+
+Hai inviato il link del <b>CANALE</b>, ma serve il link del <b>VIDEO</b> specifico!
+
+✅ <b>Come fare:</b>
+1. Apri il video che vuoi (non il canale)
+2. Copia il link dalla barra degli indirizzi
+3. Deve essere tipo:
+   • https://youtu.be/abc123xyz
+   • https://www.youtube.com/watch?v=abc123xyz
+
+❌ NON va bene:
+   • youtube.com/@canale
+   • youtube.com/c/nomecanale
+
+📌 <b>Riprova con il link del VIDEO!</b>"""
+        else:
+            testo_errore = """❌ <b>LINK NON VALIDO</b>
+
+Il link che hai inviato non è un link YouTube valido.
+
+✅ <b>Invia un link valido come:</b>
+• https://youtu.be/abc123xyz
+• https://www.youtube.com/watch?v=abc123xyz
+
+📌 <b>Riprova!</b>"""
+        
+        bot.reply_to(message, testo_errore, parse_mode="HTML")
+        log(f"LINK ERRATO: @{username} - {tipo_errore}")
+        return
+    
+    # Se il link è valido, procedi
+    users[user_id]["link"] = link_utente
+    users[user_id]["stato"] = 0
+    users[user_id]["username"] = username
+    salva_dati()
+    
+    dati = {
+        "username": username,
+        "tipo": users[user_id]["tipo"],
+        "link": users[user_id]["link"],
+        "email": ""
+    }
+    salva_richiesta(user_id, dati, "IN ATTESA APPROVAZIONE")
+    
+    testo = """✅ <b>Richiesta registrata!</b>
+    
+📋 <i>Attende approvazione.</i>
+⏰ <i>Tempo: 24-48 ore</i>
+    
+Riceverai un messaggio quando approvata!
+    
+⚠️ <b>RICORDA:</b> Non altre richieste per 24 ore."""
+    
+    bot.reply_to(message, testo, parse_mode="HTML")
+    
+    try:
+        notifica = f"""📥 <b>RICHIESTA DA APPROVARE</b>
+        
+👤 @{username}
+🆔 {user_id}
+🎵 {dati['tipo']}
+🔗 {dati['link']}
+📊 Violazioni: {violazioni.get(user_id, 0)}/3
+⏰ Privacy accettata: {datetime.fromisoformat(accettazioni_privacy[user_id]).strftime("%d/%m %H:%M")}
+        
+👉 /approva {user_id}"""
+        
+        bot.send_message(TUO_ID, notifica, parse_mode="HTML")
+        log(f"Notifica admin ID {user_id}")
+    except Exception as e:
+        log(f"Errore notifica admin: {e}")
+    
+    log(f"LINK: @{username} - Attende approvazione")
+
+@bot.message_handler(func=lambda m: m.text and "@" in m.text and "." in m.text and " " not in m.text)
+def email(message):
+    user_id = message.from_user.id
+    username = message.from_user.username or f"ID_{user_id}"
+    
+    if is_bannato(user_id):
+        return
+    
+    if not ha_accettato_privacy(user_id):
+        bot.reply_to(message, "❌ Devi prima accettare la privacy con /start")
+        return
+    
+    if user_id not in users or users[user_id]["stato"] != 3:
+        if user_id in ultime_richieste:
+            tempo_trascorso = time.time() - ultime_richieste[user_id]
+            if tempo_trascorso < 86400:
+                aggiungi_violazione(user_id, username, "Invio email durante limite 24h")
+        return
+    
+    email_text = message.text.strip()
+    users[user_id]["email"] = email_text
+    users[user_id]["stato"] = 0
+    
+    ultime_richieste[user_id] = time.time()
+    salva_dati()
+    log(f"⏰ Tempo registrato per @{username} alle {datetime.now()}")
+    
+    log(f"ULTIMA RICHIESTA @{username}: {datetime.now()}")
+    
+    aggiorna_stato_richiesta(user_id, "EMAIL RICEVUTA - ATTENDE LINK", email_text)
+    
+    risposta = f"""📧 <b>EMAIL REGISTRATA CON SUCCESSO!</b>
+    
+La tua email: {email_text}
+    
+✅ La tua richiesta è in coda. Riceverai la base entro 48 ore.
+    
+{'='*40}
+⭐ <b>ATTENZIONE - LEGGI BENE!</b> ⭐
+{'='*40}
+
+<b>Prima di inviarti la base, DEVO vedere:</b>
+
+✅ <b>LIKE</b> sulla demo (obbligatorio)
+✅ <b>COMMENTO</b> sulla demo (ALTAMENTE raccomandato)
+
+💡 <b>Perché il commento è così importante?</b>
+• Il like da solo non basta per far crescere il canale
+• YouTube considera i commenti come "interazione vera"
+• Più commenti = più visibilità = più basi gratis per tutti!
+• Mi fa capire che sei una persona VERA, non un profilo fantasma
+
+⚠️ <b>Chi lascia SOLO IL LIKE...</b>
+... finisce in fondo alla coda. E aspetta MOLTO più a lungo. 
+Semplicemente perché il like da solo non mi aiuta abbastanza.
+
+🎁 <b>Chi lascia LIKE + COMMENTO...</b>
+... viene servito subito, perché dimostra di aver capito che questo servizio vive della community.
+
+<b>Non serve un commento lungo:</b>
+Basta un emoji, un "grazie", un "❤️", qualsiasi cosa!
+L'importante è che CI SIA.
+
+{'='*40}
+<b>🎯 PROSSIMA RICHIESTA:</b> Tra 24 ore
+⚠️ <b>RICORDA:</b> Non altre richieste per 24 ore."""
+    
+    bot.reply_to(message, risposta, parse_mode="HTML", disable_web_page_preview=False)
+    
+    try:
+        notifica = f"""📧 <b>NUOVA EMAIL DA GESTIRE</b>
+        
+👤 Utente: @{username}
+🆔 ID: {user_id}
+📩 Email: {email_text}
+🎵 Tipo: {users[user_id]['tipo']}
+🔗 Link originale: {users[user_id]['link']}
+        
+{'='*40}
+🔍 <b>VERIFICA LIKE/COMMENTO:</b>
+{'='*40}
+
+<b>Prima di inviare il link, controlla:</b>
+✅ Like sul video? ________
+✅ Commento sul video? ________
+
+💡 <b>Ricorda:</b>
+• Solo like = coda lenta
+• Like + commento = priorità
+
+<b>Comandi rapidi:</b>
+/invia_prioritario {user_id} [drive_link] - Invia SUBITO (like+commento)
+/segna_attesa {user_id} - Metti in attesa per solo like
+/coda - Vedi tutti in attesa
+
+{'='*40}
+📤 <b>PER INVIARE IL LINK DRIVE:</b>
+        
+/link {user_id} https://tuo.link.drive.qui
+        
+⏰ Il link scadrà tra 12 ore
+        
+📝 Il messaggio includerà:
+• Link Google Drive (scadenza 12h)
+• Info costi reali devocalizzazione
+• Link PayPal per contributi volontari
+• 📅 Cancellazione automatica dopo {GDPR_MAX_GIORNI} giorni (GDPR)"""
+        
+        bot.send_message(TUO_ID, notifica, parse_mode="HTML")
+        log(f"📧 Notifica email admin per ID {user_id}")
+    except Exception as e:
+        log(f"Errore notifica email: {e}")
+    
+    log(f"EMAIL: @{username} -> {email_text}")
+
 # ====================== GESTIONE MESSAGGI PRIVATI ALL'ADMIN ======================
 
 @bot.message_handler(func=lambda m: m.from_user.id == TUO_ID and not m.text.startswith('/'))
 def messaggi_privati_admin(message):
-    """Gestisce i messaggi privati che l'admin invia al bot"""
+    """Gestisce i messaggi privati che l'admin invia al bot (es: risposte, conferme)"""
+    
     testo = message.text
     log(f"📨 ADMIN ha inviato: {testo}")
+    
+    # Qui puoi aggiungere logica per gestire risposte specifiche
+    # Ad esempio, se l'admin risponde "ok" a qualcosa
+    
     bot.reply_to(message, "✅ Messaggio ricevuto. Usa i comandi / per gestire il bot.")
 
 @bot.message_handler(func=lambda m: True)
@@ -2058,36 +2361,6 @@ def default(message):
     
     bot.reply_to(message, testo)
 
-# ====================== CONFIGURAZIONE FLASK PER RENDER ======================
-from flask import Flask, request
-import logging
-
-# Disabilita i log di Flask per non sporcare la console
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot Italia Karaoke è attivo! ✅"
-
-@app.route('/', methods=['POST'])
-def webhook():
-    print("🔥 WEBHOOK CHIAMATO!")
-    if request.headers.get('content-type') == 'application/json':
-        update = telebot.types.Update.de_json(request.get_json())
-        print(f"Update ricevuto: {update}")
-        bot.process_new_updates([update])
-        return 'OK', 200
-    return 'OK', 200
-
-# === AVVIO SISTEMI AUTOMATICI ===
-def avvia_sistemi_automatici():
-    programma_cancellazione_gdpr()
-    controlla_attesa_e_invia_avvisi()
-
-threading.Thread(target=avvia_sistemi_automatici, daemon=True).start()
-
 # === AVVIO BOT ===
 print("="*60)
 print("🤖 ITALIA KARAOKE BOT - VERSIONE COMPLETA CON GDPR POTENZIATO")
@@ -2099,21 +2372,77 @@ print(f"🛡️ Privacy accettate: {len(accettazioni_privacy)}")
 print(f"🗑️ Dati in cancellazione: {len(dati_da_cancellare)}")
 print(f"⏳ Utenti in attesa (solo like): {len(attesa_solo_like)}")
 print("="*60)
+print("✅ Sistema cancellazione automatica GDPR ATTIVATO")
+print(f"✅ Dati conservati per: {GDPR_MAX_GIORNI} giorni")
+print("✅ OFFUSCAMENTO EMAIL NEI LOG ATTIVATO")
+print("✅ PULIZIA RICHIESTE.TXT SU CANCELLAZIONE")
+print("✅ SISTEMA AVVISI AUTOMATICI ATTIVATO (controllo ogni ora)")
+print("   • ⏰ 3h → primo avviso")
+print("   • ⚠️ 6h → secondo avviso")
+print("   • 🔴 9h → terzo avviso")
+print("   • 🗑️ 12h → rimozione automatica")
+print("✅ CONTROLLO LINK ATTIVATO:")
+print("   • ✅ Rifiuta link del canale")
+print("   • ✅ Accetta solo video specifici")
+print("✅ SISTEMA LIKE/COMMENTO ATTIVATO:")
+print("   • /coda - Vedi chi ha fatto solo like")
+print("   • /invia_prioritario - Per like+commento")
+print("   • /segna_attesa - Metti in coda lenta")
+print("   • /statattesa - Statistiche coda")
+print("✅ COMANDO APPROVA ATTIVATO:")
+print("   • /approva ID - Approva richiesta e chiede email")
+print("✅ GESTIONE MESSAGGI ADMIN ATTIVATA")
+print("🔄 In ascolto... CTRL+C per fermare")
+print("="*60)
+
+# Avvia i sistemi automatici
+programma_cancellazione_gdpr()
+controlla_attesa_e_invia_avvisi()
+
+# ====================== CONFIGURAZIONE FLASK PER RENDER ======================
+from flask import Flask, request
+app = Flask(__name__)
+
+@app.route('/', methods=['POST'])
+def webhook():
+    print("🔥 WEBHOOK CHIAMATO!")
+    if request.headers.get('content-type') == 'application/json':
+        update = telebot.types.Update.de_json(request.get_json())
+        print(f"Update ricevuto: {update}")
+        bot.process_new_updates([update])
+        return 'OK', 200
+    return 'OK', 200
+
+@app.route('/')
+def home():
+    return "Bot Italia Karaoke è attivo! ✅"
+
+# === AVVIO SISTEMI AUTOMATICI ===
+def avvia_sistemi_automatici():
+    programma_cancellazione_gdpr()
+    controlla_attesa_e_invia_avvisi()
+
+threading.Thread(target=avvia_sistemi_automatici, daemon=True).start()
+
+# === AVVIO BOT ===
+print("="*60)
+print("🤖 ITALIA KARAOKE BOT - VERSIONE COMPLETA CON WEBHOOK")
+print("="*60)
+print(f"👑 Admin ID: {TUO_ID}")
+print(f"🚫 Utenti bannati: {len(utenti_bannati)}")
+print(f"👥 Utenti attivi: {len(users)}")
+print("="*60)
 
 # === CONFIGURAZIONE WEBHOOK PER RENDER ===
 if os.environ.get('RENDER'):
-    # Configura il webhook per Render
-    render_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://italia-karaoke-bot-1.onrender.com')
-    webhook_url = f"{render_url}/webhook"
-    
-    # Rimuovi eventuali webhook esistenti e imposta il nuovo
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://italia-karaoke-bot-juz2.onrender.com')
+    webhook_url = f"{render_url}/"
     bot.remove_webhook()
     time.sleep(1)
     bot.set_webhook(url=webhook_url)
     print(f"✅ Webhook configurato su {webhook_url}")
     print("✅ Bot avviato in modalità webhook per Render")
 else:
-    # In locale, usa il polling
     print("🔄 Avvio polling locale...")
     try:
         bot.polling(none_stop=True, interval=1, timeout=30)
@@ -2131,12 +2460,3 @@ if __name__ == "__main__":
     if not os.environ.get('RENDER'):
         while True:
             time.sleep(60)
-
-# === AVVIO SERVER FLASK (FONDAMENTALE PER RENDER) ===
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
-
-
-
-
