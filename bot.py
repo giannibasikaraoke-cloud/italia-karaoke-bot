@@ -2071,17 +2071,14 @@ app = Flask(__name__)
 def home():
     return "Bot Italia Karaoke è attivo! ✅"
 
-@app.route('/webhook', methods=['POST'])
+@app.route('/', methods=['POST'])
 def webhook():
-    print("🔥 WEBHOOK CHIAMATO!")  # Questo comparirà nei log di Render
-    print(f"Headers: {request.headers}")
-    
+    print("🔥 WEBHOOK CHIAMATO!")
     if request.headers.get('content-type') == 'application/json':
         update = telebot.types.Update.de_json(request.get_json())
         print(f"Update ricevuto: {update}")
         bot.process_new_updates([update])
         return 'OK', 200
-    print("❌ Content-type non corretto")
     return 'OK', 200
 
 # === AVVIO SISTEMI AUTOMATICI ===
@@ -2139,6 +2136,7 @@ if __name__ == "__main__":
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+
 
 
 
