@@ -2356,21 +2356,22 @@ def default(message):
     
     bot.reply_to(message, testo)
 
-# === AGGIUNGI QUI LE RIGHE PER RENDER (PRIMA DEL POLLING) ===
+# ====================== FINE FUNZIONI ======================
+
+# === PER GUNICORN SU RENDER ===
+from flask import Flask
 import os
-import threading
 
-def keep_alive():
-    """Mantiene il bot attivo su Render"""
-    port = int(os.environ.get('PORT', 5000))
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.set_webhook(url=f"https://italia-karaoke-bot.onrender.com/{port}")
+# Crea un'app Flask minima per far funzionare gunicorn
+app = Flask(__name__)
 
-# Se siamo su Render, attiva il webhook
-if os.environ.get('RENDER'):
-    keep_alive()
-# === FINE RIGHE PER RENDER ===
+@app.route('/')
+def home():
+    return "Bot Italia Karaoke è attivo! ✅"
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 # === AVVIO BOT ===
 print("="*60)
@@ -2381,26 +2382,40 @@ print(f"🚫 Utenti bannati: {len(utenti_bannati)}")
 print(f"👥 Utenti attivi: {len(users)}")
 print("="*60)
 
-# Avvia i sistemi automatici
-programma_cancellazione_gdpr()
-controlla_attesa_e_invia_avvisi()
+# Avvia i sistemi automatici in un thread separato
+def avvia_sistemi_automatici():
+    programma_cancellazione_gdpr()
+    controlla_attesa_e_invia_avvisi()
 
-# === POLLING ===
-if __name__ == "__main__":
+# Avvia i thread
+threading.Thread(target=avvia_sistemi_automatici, daemon=True).start()
+
+# Avvia il bot in un thread separato
+def avvia_bot():
     try:
-        # Se NON siamo su Render, usa il polling normale
-        if not os.environ.get('RENDER'):
-            bot.polling(none_stop=True, interval=1, timeout=30)
-        else:
-            # Su Render, rimani in ascolto senza polling
-            print("✅ Bot avviato in modalità webhook su Render")
-            while True:
-                time.sleep(3600)  # Sleep per un'ora, tanto il webhook gestisce tutto
-    except KeyboardInterrupt:
-        print("\n🛑 Bot fermato manualmente")
-        salva_dati()
-        print("✅ Dati salvati!")
+        print("✅ Bot avviato in modalità polling...")
+        bot.polling(none_stop=True, interval=1, timeout=30)
     except Exception as e:
-        print(f"⚠️ Errore nel polling: {e}")
-        salva_dati()
+        print(f"❌ Errore nel polling: {e}")
         time.sleep(5)
+
+# Se NON siamo su Render, avvia il polling
+if not os.environ.get('RENDER'):
+    # Avvia il bot in un thread separato
+    threading.Thread(target=avvia_bot, daemon=True).start()
+    
+    # Mantieni il programma in esecuzione
+    while True:
+        time.sleep(60)
+else:
+    # Su Render, Flask si occupa di tenere vivo il processo
+    print("✅ Bot avviato in modalità Flask per Render")
+    # Il bot continua a funzionare in background grazie ai thread
+
+# Questa parte serve solo se eseguito direttamente
+if __name__ == "__main__":
+    # Su Render, non avviare il server Flask integrato
+    if not os.environ.get('RENDER'):
+        # Mantieni il programma in esecuzione
+        while True:
+            time.sleep(60)
