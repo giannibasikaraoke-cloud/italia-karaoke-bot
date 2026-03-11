@@ -2072,10 +2072,15 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    print("🔥 WEBHOOK CHIAMATO!")  # Questo comparirà nei log di Render
+    print(f"Headers: {request.headers}")
+    
     if request.headers.get('content-type') == 'application/json':
         update = telebot.types.Update.de_json(request.get_json())
+        print(f"Update ricevuto: {update}")
         bot.process_new_updates([update])
         return 'OK', 200
+    print("❌ Content-type non corretto")
     return 'OK', 200
 
 # === AVVIO SISTEMI AUTOMATICI ===
@@ -2128,3 +2133,4 @@ if __name__ == "__main__":
     if not os.environ.get('RENDER'):
         while True:
             time.sleep(60)
+
