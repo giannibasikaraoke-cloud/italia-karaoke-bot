@@ -9,6 +9,42 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request
 import logging
 
+# === DISABILITA LOG FLASK PER EVITARE CONFLITTI ===
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+
+# === LOG CON OFFUSCAMENTO EMAIL (RINOMINATA IN scrivi_log) ===
+def scrivi_log(t):
+    """Registra i messaggi di log offuscando le email per GDPR"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Offusca le email nei log (es: mario.rossi@gmail.com -> mar***@g***.com)
+    def offusca_email(testo):
+        # Pattern per riconoscere email
+        pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        
+        def sostituisci(match):
+            email = match.group(0)
+            if '@' in email:
+                local, dominio = email.split('@', 1)
+                # Offusca local (es: mariorossi -> mar***)
+                local_offuscato = local[:3] + '***' if len(local) > 3 else local[0] + '***'
+                # Offusca dominio (es: gmail.com -> g***.com)
+                if '.' in dominio:
+                    dominio_nome, dominio_est = dominio.split('.', 1)
+                    dominio_offuscato = dominio_nome[:1] + '***.' + dominio_est
+                else:
+                    dominio_offuscato = dominio[:1] + '***'
+                return f"{local_offuscato}@{dominio_offuscato}"
+            return email
+        
+        return re.sub(pattern, sostituisci, testo)
+    
+    messaggio_offuscato = offusca_email(t)
+    print(f"[{timestamp}] {messaggio_offuscato}")
+    
+    with open("log.txt", "a", encoding="utf-8") as f:
+        f.write(f"[{timestamp}] {messaggio_offuscato}\n")
+
 # === CARICA CONFIG ===
 # Prova a prendere il token dall'ambiente (Render) o dal file config.py
 TOKEN = os.environ.get('BOT_TOKEN')
@@ -28,37 +64,6 @@ except:
     exit()
 
 bot = telebot.TeleBot(TOKEN)
-
-# === LOG CON OFFUSCAMENTO EMAIL (MODIFICATO) ===
-def log(t):
-    """Registra i messaggi di log offuscando le email per GDPR"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Offusca le email nei log (es: mario.rossi@gmail.com -> mar***@g***.com)
-    def offusca_email(testo):
-        # Pattern per riconoscere email
-        pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        
-        def sostituisci(match):
-            email = match.group(0)
-            if '@' in email:
-                local, dominio = email.split('@', 1)
-                local_offuscato = local[:3] + '***' if len(local) > 3 else local[0] + '***'
-                if '.' in dominio:
-                    dominio_nome, dominio_est = dominio.split('.', 1)
-                    dominio_offuscato = dominio_nome[:1] + '***.' + dominio_est
-                else:
-                    dominio_offuscato = dominio[:1] + '***'
-                return f"{local_offuscato}@{dominio_offuscato}"
-            return email
-        
-        return re.sub(pattern, sostituisci, testo)
-    
-    messaggio_offuscato = offusca_email(t)
-    print(f"[{timestamp}] {messaggio_offuscato}")
-    
-    with open("log.txt", "a", encoding="utf-8") as f:
-        f.write(f"[{timestamp}] {messaggio_offuscato}\n")
 
 # === VARIABILI GLOBALI ===
 users = None
@@ -91,7 +96,7 @@ def salva_dati():
     }
     with open("dati_bot.json", "w", encoding="utf-8") as f:
         json.dump(dati, f, indent=2, default=str)
-    log("💾 Dati salvati su disco")
+    scrivi_log("💾 Dati salvati su disco")
 
 def carica_dati():
     """Carica TUTTI i dati dal file JSON"""
@@ -233,7 +238,7 @@ def aggiorna_stato_richiesta(user_id, nuovo_stato, email=""):
                 f.write(lines[i])
         return True
     except Exception as e:
-        log(f"❌ Errore aggiorna_stato_richiesta: {e}")
+        scrivi_log(f"❌ Errore aggiorna_stato_richiesta: {e}")
         return False
 
 # === FUNZIONE DI CANCELLAZIONE AUTOMATICA GDPR (MODIFICATA) ===
@@ -282,9 +287,9 @@ def cancella_dati_scaduti():
                             continue
                         if not skip:
                             f.write(line)
-                log(f"🧹 GDPR: Rimosse richieste di {username} da richieste.txt")
+                scrivi_log(f"🧹 GDPR: Rimosse richieste di {username} da richieste.txt")
             except Exception as e:
-                log(f"⚠️ Errore pulizia richieste.txt per {username}: {e}")
+                scrivi_log(f"⚠️ Errore pulizia richieste.txt per {username}: {e}")
             
             del users[user_id]
             
@@ -302,7 +307,7 @@ def cancella_dati_scaduti():
                 del avvisi_inviati[user_id]
             
             cancellati += 1
-            log(f"🧹 GDPR AUTO: Dati personali cancellati per @{username} (scaduti {GDPR_MAX_GIORNI} giorni)")
+            scrivi_log(f"🧹 GDPR AUTO: Dati personali cancellati per @{username} (scaduti {GDPR_MAX_GIORNI} giorni)")
     
     for user_id in list(dati_da_cancellare.keys()):
         if user_id not in users:
@@ -310,7 +315,7 @@ def cancella_dati_scaduti():
     
     if cancellati > 0:
         salva_dati()
-        log(f"✅ GDPR: Cancellati automaticamente {cancellati} set di dati personali scaduti")
+        scrivi_log(f"✅ GDPR: Cancellati automaticamente {cancellati} set di dati personali scaduti")
     
     return cancellati
 
@@ -336,11 +341,11 @@ def programma_cancellazione_gdpr():
                     except:
                         pass
             except Exception as e:
-                log(f"❌ Errore pulizia automatica GDPR: {e}")
+                scrivi_log(f"❌ Errore pulizia automatica GDPR: {e}")
     
     thread = threading.Thread(target=pulizia_periodica, daemon=True)
     thread.start()
-    log(f"✅ Sistema cancellazione automatica GDPR attivato (ogni 24 ore)")
+    scrivi_log(f"✅ Sistema cancellazione automatica GDPR attivato (ogni 24 ore)")
 
 # === CANCELLA DATI UTENTE (DOPO INVIO) CON PROGRAMMAZIONE ===
 def cancella_dati_utente(user_id, programma_cancellazione=True):
@@ -355,7 +360,7 @@ def cancella_dati_utente(user_id, programma_cancellazione=True):
     if users[user_id].get("stato") == 0 and email != "N/A":
         if programma_cancellazione:
             dati_da_cancellare[user_id] = datetime.now()
-            log(f"📅 GDPR: Programmata cancellazione dati per @{username} tra {GDPR_MAX_GIORNI} giorni")
+            scrivi_log(f"📅 GDPR: Programmata cancellazione dati per @{username} tra {GDPR_MAX_GIORNI} giorni")
             
             try:
                 messaggio_gdpr = f"""
@@ -406,7 +411,7 @@ Per richiedere la cancellazione immediata, usa /cancelladati
     salva_dati()
     
     if dati_cancellati:
-        log(f"🧹 Dati cancellati per ID {user_id}: {', '.join(dati_cancellati)}")
+        scrivi_log(f"🧹 Dati cancellati per ID {user_id}: {', '.join(dati_cancellati)}")
         return True
     
     return False
@@ -423,7 +428,7 @@ def aggiungi_violazione(user_id, username, motivo):
     violazioni[user_id] += 1
     conteggio = violazioni[user_id]
     
-    log(f"⚠️ VIOLAZIONE: @{username} - {motivo} (Totale: {conteggio}/3)")
+    scrivi_log(f"⚠️ VIOLAZIONE: @{username} - {motivo} (Totale: {conteggio}/3)")
     
     if conteggio >= 3:
         utenti_bannati.add(user_id)
@@ -439,9 +444,9 @@ Hai superato il limite di violazioni:
 ❌ Il ban è permanente e irreversibile."""
             
             bot.send_message(user_id, messaggio_ban)
-            log(f"🚫 BAN PERMANENTE applicato a @{username}")
+            scrivi_log(f"🚫 BAN PERMANENTE applicato a @{username}")
         except Exception as e:
-            log(f"❌ Errore invio messaggio ban: {e}")
+            scrivi_log(f"❌ Errore invio messaggio ban: {e}")
         
         try:
             bot.send_message(TUO_ID, f"""
@@ -454,7 +459,7 @@ Hai superato il limite di violazioni:
 ⏰ Data: {datetime.now().strftime("%d/%m/%Y %H:%M")}
 """)
         except Exception as e:
-            log(f"❌ Errore notifica admin ban: {e}")
+            scrivi_log(f"❌ Errore notifica admin ban: {e}")
         
         return True
     return False
@@ -484,7 +489,7 @@ def ha_accettato_privacy(user_id):
 def registra_accettazione_privacy(user_id):
     accettazioni_privacy[user_id] = datetime.now().isoformat()
     salva_dati()
-    log(f"📝 Privacy accettata da ID {user_id}")
+    scrivi_log(f"📝 Privacy accettata da ID {user_id}")
 
 # === FUNZIONE PER CONTROLLARE DATA CANCELLAZIONE ===
 def get_data_cancellazione(user_id):
@@ -545,18 +550,18 @@ def controlla_attesa_e_invia_avvisi():
                             del attesa_solo_like[user_id]
                             if user_id in avvisi_inviati:
                                 del avvisi_inviati[user_id]
-                            log(f"⏰ UTENTE RIMOSSO: ID {user_id} dopo 12 ore di attesa")
+                            scrivi_log(f"⏰ UTENTE RIMOSSO: ID {user_id} dopo 12 ore di attesa")
                             avvisi_inviati_oggi += 1
                 
                 if avvisi_inviati_oggi > 0:
-                    log(f"📨 AVVISI AUTOMATICI: Inviati {avvisi_inviati_oggi} promemoria")
+                    scrivi_log(f"📨 AVVISI AUTOMATICI: Inviati {avvisi_inviati_oggi} promemoria")
                     
             except Exception as e:
-                log(f"❌ Errore avvisi automatici: {e}")
+                scrivi_log(f"❌ Errore avvisi automatici: {e}")
     
     thread = threading.Thread(target=avvisi_periodici, daemon=True)
     thread.start()
-    log("✅ Sistema avvisi automatici attivato (controllo ogni ora)")
+    scrivi_log("✅ Sistema avvisi automatici attivato (controllo ogni ora)")
 
 def is_avviso_inviato(user_id, tipo_avviso):
     if user_id not in avvisi_inviati:
@@ -630,7 +635,7 @@ def start(message):
 Il tuo account è stato bannato permanentemente.
 ❌ Il ban è irreversibile."""
         bot.reply_to(message, testo)
-        log(f"BANNATO tenta accesso: @{username}")
+        scrivi_log(f"BANNATO tenta accesso: @{username}")
         return
     
     if ha_accettato_privacy(user_id):
@@ -651,7 +656,7 @@ Il tuo account è stato bannato permanentemente.
             salva_dati()
             
             mostra_pulsanti_scelta(message.chat.id)
-            log(f"CONTINUA: @{username} già aveva accettato privacy")
+            scrivi_log(f"CONTINUA: @{username} già aveva accettato privacy")
             return
         elif tipo == "TEMPO":
             ore_rimaste_int = int(ore_rimaste)
@@ -666,7 +671,7 @@ Hai già fatto una richiesta nelle ultime 24 ore.
 👉 Usa /status per controllare il tuo stato."""
             
             bot.reply_to(message, testo)
-            log(f"LIMITE: @{username} ha già richiesto, {ore_rimaste:.1f} ore rimaste")
+            scrivi_log(f"LIMITE: @{username} ha già richiesto, {ore_rimaste:.1f} ore rimaste")
             return
     
     start_text = """
@@ -687,7 +692,7 @@ Clicca su "📜 LEGGI E ACCETTA" per continuare.
     keyboard.add(rules_button)
     
     bot.send_message(message.chat.id, start_text, parse_mode="HTML", reply_markup=keyboard)
-    log(f"START: @{username} - Mostrato pulsante iniziale")
+    scrivi_log(f"START: @{username} - Mostrato pulsante iniziale")
 
 # === FUNZIONE PER MOSTRARE PRIVACY SEMPLIFICATA ===
 def mostra_privacy_semplice(chat_id, message_id=None):
@@ -847,7 +852,7 @@ Hai già fatto una richiesta nelle ultime 24 ore.
         
         bot.answer_callback_query(call.id, "❌ Devi aspettare prima di poter richiedere!", show_alert=True)
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=messaggio, parse_mode="HTML")
-        log(f"LIMITE PULSANTE: @{username} ha già richiesto")
+        scrivi_log(f"LIMITE PULSANTE: @{username} ha già richiesto")
         return
     
     registra_accettazione_privacy(user_id)
@@ -858,7 +863,7 @@ Hai già fatto una richiesta nelle ultime 24 ore.
     bot.answer_callback_query(call.id, "✅ Informativa accettata!")
     mostra_pulsanti_scelta(call.message.chat.id, call.message.message_id)
     
-    log(f"ACCETTAZIONE PRIVACY: @{username}")
+    scrivi_log(f"ACCETTAZIONE PRIVACY: @{username}")
 
 @bot.callback_query_handler(func=lambda call: call.data in [
     "scelta_A", "scelta_B_type", "scelta_B_completa", "scelta_B_cori",
@@ -1036,7 +1041,7 @@ def handle_scelta_AB(call):
     
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=testo_completo, parse_mode="HTML")
     
-    log(f"SCELTA {scelta_utente}: @{username}")
+    scrivi_log(f"SCELTA {scelta_utente}: @{username}")
 
 # === COMANDI PUBBLICI BASE ===
 @bot.message_handler(commands=['regole', 'rules'])
@@ -1066,7 +1071,7 @@ se ne assume ogni responsabilità legale (SIAE e normative vigenti).
 Italia Karaoke non concede licenze e non risponde di abusi o violazioni."""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"REGOLETTO: @{message.from_user.username or message.from_user.id}")
+    scrivi_log(f"REGOLETTO: @{message.from_user.username or message.from_user.id}")
 
 @bot.message_handler(commands=['privacy', 'gdpr'])
 def privacy(message):
@@ -1106,7 +1111,7 @@ def privacy(message):
 Usa il comando /cancelladati"""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"PRIVACY GDPR: @{message.from_user.username or message.from_user.id}")
+    scrivi_log(f"PRIVACY GDPR: @{message.from_user.username or message.from_user.id}")
 
 @bot.message_handler(commands=['richiesta', 'request', 'howto'])
 def richiesta(message):
@@ -1141,7 +1146,7 @@ def richiesta(message):
 ⚠️ <i>3 violazioni = BAN PERMANENTE</i>"""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"RICHIESTAINFO: @{message.from_user.username or message.from_user.id}")
+    scrivi_log(f"RICHIESTAINFO: @{message.from_user.username or message.from_user.id}")
 
 @bot.message_handler(commands=['aiuto', 'help'])
 def aiuto(message):
@@ -1176,7 +1181,7 @@ Contatta l'amministratore tramite Telegram.
 /approva ID - Approva la richiesta e chiede email"""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"AIUTO: @{message.from_user.username or message.from_user.id}")
+    scrivi_log(f"AIUTO: @{message.from_user.username or message.from_user.id}")
 
 @bot.message_handler(commands=['status', 'mystatus', 'mietempo'])
 def status_cmd(message):
@@ -1261,7 +1266,7 @@ Il tuo account è stato bannato per 3 violazioni.
 👉 Usa /start per iniziare."""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"STATUS richiesto da @{username}")
+    scrivi_log(f"STATUS richiesto da @{username}")
 
 # === COMANDO CANCELLADATI POTENZIATO (MODIFICATO) ===
 @bot.message_handler(commands=['cancelladati', 'deletemydata', 'gdprdelete'])
@@ -1322,7 +1327,7 @@ Scrivi: <code>CANCELLA SUBITO I MIEI DATI</code>
 Ignora questo messaggio"""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"CANCELLAZIONE DATI richiesta da @{username}")
+    scrivi_log(f"CANCELLAZIONE DATI richiesta da @{username}")
 
 @bot.message_handler(func=lambda m: m.text and "CANCELLA SUBITO I MIEI DATI" in m.text.upper())
 def conferma_cancellazione(message):
@@ -1346,9 +1351,9 @@ def conferma_cancellazione(message):
                     continue
                 if not skip:
                     f.write(line)
-        log(f"🧹 GDPR: Rimosse richieste di @{username} da richieste.txt su richiesta diretta")
+        scrivi_log(f"🧹 GDPR: Rimosse richieste di @{username} da richieste.txt su richiesta diretta")
     except Exception as e:
-        log(f"⚠️ Errore pulizia richieste.txt per @{username}: {e}")
+        scrivi_log(f"⚠️ Errore pulizia richieste.txt per @{username}: {e}")
     
     # Pulisci dal database
     successo = cancella_dati_utente(user_id, programma_cancellazione=False)
@@ -1387,7 +1392,7 @@ Dovrai ripartire da zero con /start
 Grazie per aver usato Italia Karaoke! 🎵"""
         
         bot.reply_to(message, risposta, parse_mode="HTML")
-        log(f"✅ DATI CANCELLATI IMMEDIATAMENTE per @{username} (GDPR su richiesta + richieste.txt)")
+        scrivi_log(f"✅ DATI CANCELLATI IMMEDIATAMENTE per @{username} (GDPR su richiesta + richieste.txt)")
     else:
         bot.reply_to(message, "ℹ️ Non sono stati trovati dati personali da cancellare.")
 
@@ -1480,15 +1485,15 @@ La tua richiesta è stata approvata dall'amministratore.
 ✅ È stato inviato un messaggio all'utente per chiedere l'email.
 📋 Quando risponderà, riceverai una notifica.""", parse_mode="HTML")
             
-            log(f"✅ APPROVA: Admin ha approvato richiesta per ID {user_id} - In attesa email")
+            scrivi_log(f"✅ APPROVA: Admin ha approvato richiesta per ID {user_id} - In attesa email")
             
         except Exception as e:
             bot.reply_to(message, f"❌ Errore nell'invio del messaggio all'utente: {e}")
-            log(f"❌ ERRORE APPROVA: Impossibile contattare ID {user_id}: {e}")
+            scrivi_log(f"❌ ERRORE APPROVA: Impossibile contattare ID {user_id}: {e}")
             
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
-        log(f"❌ Errore comando approva: {e}")
+        scrivi_log(f"❌ Errore comando approva: {e}")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith('/cancella'))
 def cancella_admin(message):
@@ -1534,11 +1539,11 @@ Se era un errore, puoi ripartire da zero con /start""")
             risposta = f"ℹ️ Nessun dato personale trovato per l'utente {user_id} (già cancellati?)"
         
         bot.reply_to(message, risposta, parse_mode="HTML")
-        log(f"ADMIN CANCELLA DATI: ID {user_id}")
+        scrivi_log(f"ADMIN CANCELLA DATI: ID {user_id}")
         
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
-        log(f"❌ Errore cancellazione admin: {e}")
+        scrivi_log(f"❌ Errore cancellazione admin: {e}")
 
 @bot.message_handler(commands=['mail', 'email', 'mailing'])
 def mail(message):
@@ -1591,11 +1596,11 @@ def mail(message):
         else:
             bot.reply_to(message, risposta, parse_mode="HTML")
             
-        log(f"MAIL: Admin ha visto {totale} email")
+        scrivi_log(f"MAIL: Admin ha visto {totale} email")
             
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
-        log(f"❌ Errore comando mail: {e}")
+        scrivi_log(f"❌ Errore comando mail: {e}")
 
 @bot.message_handler(commands=['lista'])
 def lista(message):
@@ -1635,11 +1640,11 @@ def lista(message):
         else:
             bot.reply_to(message, risposta, parse_mode="HTML")
             
-        log(f"LISTA: Admin ha visto {len(richieste)} richieste")
+        scrivi_log(f"LISTA: Admin ha visto {len(richieste)} richieste")
             
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
-        log(f"❌ Errore lista: {e}")
+        scrivi_log(f"❌ Errore lista: {e}")
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith('/ban'))
 def ban_manuale(message):
@@ -1670,7 +1675,7 @@ Il ban è permanente.""")
             pass
         
         bot.reply_to(message, f"✅ Utente {user_id} bannato.\nMotivo: {motivo}")
-        log(f"BAN MANUALE: ID {user_id} - Motivo: {motivo}")
+        scrivi_log(f"BAN MANUALE: ID {user_id} - Motivo: {motivo}")
         
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
@@ -1704,7 +1709,7 @@ Puoi ora utilizzare nuovamente il bot.""")
                 pass
             
             bot.reply_to(message, f"✅ Ban rimosso per l'utente {user_id}")
-            log(f"UNBAN: ID {user_id}")
+            scrivi_log(f"UNBAN: ID {user_id}")
         else:
             bot.reply_to(message, f"ℹ️ L'utente {user_id} non è bannato")
             
@@ -1803,9 +1808,9 @@ def invia_link(message):
         
         try:
             bot.send_message(user_id, messaggio_utente, parse_mode="HTML", disable_web_page_preview=False)
-            log(f"✅ Link Drive inviato a @{username}")
+            scrivi_log(f"✅ Link Drive inviato a @{username}")
             
-            log(f"📅 GDPR: Programmata cancellazione dati per @{username} tra {GDPR_MAX_GIORNI} giorni")
+            scrivi_log(f"📅 GDPR: Programmata cancellazione dati per @{username} tra {GDPR_MAX_GIORNI} giorni")
             
             bot.reply_to(message, f"""✅ Link inviato con successo!
             
@@ -1822,11 +1827,11 @@ def invia_link(message):
 📅 <b>Cancellazione automatica programmata tra {GDPR_MAX_GIORNI} giorni</b>""", parse_mode="HTML")
             
             salva_dati()
-            log(f"LINK DRIVE: @{username} -> {drive_url} + cancellazione GDPR programmata")
+            scrivi_log(f"LINK DRIVE: @{username} -> {drive_url} + cancellazione GDPR programmata")
             
         except Exception as e:
             bot.reply_to(message, f"❌ Errore invio a utente: {e}")
-            log(f"❌ Errore invio link a @{username}: {e}")
+            scrivi_log(f"❌ Errore invio link a @{username}: {e}")
         
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
@@ -1858,7 +1863,7 @@ def invia_prioritario(message):
         salva_dati()
         
         bot.reply_to(message, f"✅ Inviato PRIORITARIO a ID {user_id} (like+commento verificati)")
-        log(f"INVIO PRIORITARIO: ID {user_id} (like+commento)")
+        scrivi_log(f"INVIO PRIORITARIO: ID {user_id} (like+commento)")
         
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
@@ -1881,7 +1886,7 @@ def segna_attesa(message):
         salva_dati()
         
         bot.reply_to(message, f"⏳ Utente {user_id} segnato come 'solo like' - in attesa (riceverà avvisi automatici)")
-        log(f"ATTESA: ID {user_id} messo in coda lenta per solo like")
+        scrivi_log(f"ATTESA: ID {user_id} messo in coda lenta per solo like")
         
     except Exception as e:
         bot.reply_to(message, f"❌ Errore: {e}")
@@ -1932,7 +1937,7 @@ def mostra_coda(message):
     else:
         bot.reply_to(message, testo, parse_mode="HTML")
     
-    log(f"CODA: Admin ha visto {len(attesa_solo_like)} utenti in attesa")
+    scrivi_log(f"CODA: Admin ha visto {len(attesa_solo_like)} utenti in attesa")
 
 @bot.message_handler(commands=['statattesa'])
 def stat_attesa(message):
@@ -1975,7 +1980,7 @@ def stat_attesa(message):
 🔄 Prossimo giro avvisi tra 1 ora"""
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"STAT ATTESA: {totale_attesa} in coda")
+    scrivi_log(f"STAT ATTESA: {totale_attesa} in coda")
 
 @bot.message_handler(commands=['gdprstatus', 'datascaduti'])
 def gdpr_status(message):
@@ -2029,7 +2034,7 @@ def gdpr_status(message):
     testo += f"\nSettare GDPR_MAX_GIORNI in codice (attuale: {GDPR_MAX_GIORNI})"
     
     bot.reply_to(message, testo, parse_mode="HTML")
-    log(f"GDPR STATUS: {totali} dati in cancellazione, {scaduti} scaduti")
+    scrivi_log(f"GDPR STATUS: {totali} dati in cancellazione, {scaduti} scaduti")
 
 # ====================== GESTIONE MESSAGGI PRIVATI ALL'ADMIN ======================
 
@@ -2037,7 +2042,7 @@ def gdpr_status(message):
 def messaggi_privati_admin(message):
     """Gestisce i messaggi privati che l'admin invia al bot"""
     testo = message.text
-    log(f"📨 ADMIN ha inviato: {testo}")
+    scrivi_log(f"📨 ADMIN ha inviato: {testo}")
     bot.reply_to(message, "✅ Messaggio ricevuto. Usa i comandi / per gestire il bot.")
 
 @bot.message_handler(func=lambda m: True)
@@ -2069,46 +2074,22 @@ def default(message):
     
     bot.reply_to(message, testo)
 
-# ====================== FINE FUNZIONI ======================
-
-# === CONFIGURAZIONE PER WEBHOOK SU RENDER ===
-from flask import Flask, request
-import logging
-
-# Disabilita i log di Flask per non sporcare la console
-flask_log = logging.getLogger('werkzeug')
-flask_log.setLevel(logging.ERROR)
-
+# ====================== CONFIGURAZIONE FLASK PER RENDER ======================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Bot Italia Karaoke è attivo! ✅"
 
-@app.route('/health')
-def health():
-    return "OK", 200
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Endpoint per ricevere gli aggiornamenti da Telegram"""
     if request.headers.get('content-type') == 'application/json':
-        update = request.get_json()
-        if 'message' in update or 'callback_query' in update:
-            bot.process_new_updates([telebot.types.Update.de_json(update)])
-        return 'ok', 200
-    return 'ok', 200
+        update = telebot.types.Update.de_json(request.get_json())
+        bot.process_new_updates([update])
+        return 'OK', 200
+    return 'OK', 200
 
-# === AVVIO BOT ===
-print("="*60)
-print("🤖 ITALIA KARAOKE BOT - VERSIONE COMPLETA CON WEBHOOK")
-print("="*60)
-print(f"👑 Admin ID: {TUO_ID}")
-print(f"🚫 Utenti bannati: {len(utenti_bannati)}")
-print(f"👥 Utenti attivi: {len(users)}")
-print("="*60)
-
-# Avvia i sistemi automatici in un thread separato
+# === AVVIO SISTEMI AUTOMATICI ===
 def avvia_sistemi_automatici():
     programma_cancellazione_gdpr()
     controlla_attesa_e_invia_avvisi()
@@ -2116,38 +2097,19 @@ def avvia_sistemi_automatici():
 threading.Thread(target=avvia_sistemi_automatici, daemon=True).start()
 
 # === CONFIGURAZIONE WEBHOOK ===
-def setup_webhook():
-    """Configura il webhook su Telegram"""
-    # Ottieni l'URL di Render dall'ambiente
-    render_url = os.environ.get('RENDER_EXTERNAL_URL')
-    if not render_url:
-        print("⚠️ RENDER_EXTERNAL_URL non trovata. Provo a usare un URL predefinito.")
-        render_url = f"https://{os.environ.get('RENDER_SERVICE_NAME', 'italia-karaoke-bot')}.onrender.com"
-    
+if os.environ.get('RENDER'):
+    render_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://italia-karaoke-bot-1.onrender.com')
     webhook_url = f"{render_url}/webhook"
-    print(f"🔗 Configurazione webhook: {webhook_url}")
-    
-    # Rimuovi eventuali webhook precedenti e imposta il nuovo
     bot.remove_webhook()
     time.sleep(1)
     bot.set_webhook(url=webhook_url)
-    print(f"✅ Webhook configurato con successo!")
-
-# Se siamo su Render, configura il webhook
-if os.environ.get('RENDER'):
-    setup_webhook()
+    print(f"✅ Webhook configurato: {webhook_url}")
 else:
-    # In locale, usa il polling normale
-    print("✅ Bot avviato in modalità polling locale...")
-    try:
-        bot.polling(none_stop=True, interval=1, timeout=30)
-    except Exception as e:
-        print(f"❌ Errore nel polling: {e}")
+    print("✅ Avvio in modalità polling locale...")
+    bot.polling(none_stop=True)
 
-# Questa parte serve solo per esecuzione locale
+# === MANTIENE VIVO IL PROCESSO ===
 if __name__ == "__main__":
-    # Su Render, gunicorn gestirà l'app Flask
-    # In locale, mantieni il programma in esecuzione
     if not os.environ.get('RENDER'):
         while True:
             time.sleep(60)
